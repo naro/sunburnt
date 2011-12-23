@@ -583,7 +583,7 @@ class GroupOptions(Options):
         
     def field_names_in_opts(self, opts, fields):
         if fields:
-            opts["facet.field"] = sorted(fields)
+            opts["group.field"] = sorted(fields)
 
 
 class HighlightOptions(Options):
