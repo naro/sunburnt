@@ -620,10 +620,15 @@ class SolrResponse(object):
             raise ValueError("Response indicates an error")
         result_node_list = doc.xpath("/response/result")
         group_node_list = doc.xpath("/response/lst[@name='grouped']")
+        suggestions_node_list = doc.xpath("/response//lst[@name='spellcheck']/lst[@name='suggestions']")
         if result_node_list:
             self.result = SolrResult(schema, result_node_list[0])
-        else:
+        elif group_node_list:
             self.result = SolrResult(schema, group_node_list[0])
+        elif suggestions_node_list:
+            self.result = SolrResult(schema, suggestions_node_list[0])
+        else:
+            raise SolrError("Unhandler Solr response")
         self.facet_counts = SolrFacetCounts.from_response(details)
         self.highlighting = dict((k, dict(v))
                                  for k, v in details.get("highlighting", ()))
@@ -651,9 +656,19 @@ class SolrResponse(object):
 class SolrResult(object):
     def __init__(self, schema, node):
         self.grouped = True if (node.tag == 'lst' and node.attrib['name'] == 'grouped') else False
+        self.suggests = True if (node.tag == 'lst' and node.attrib['name'] == 'suggestions') else False
         self.schema = schema
         self.name = node.attrib['name']
-        self.numFound = int(node.xpath("lst/int[@name='matches']")[0].text) if self.grouped else int(node.attrib['numFound'])
+        if self.grouped:
+            self.numFound = int(node.xpath("lst/int[@name='matches']")[0].text)
+        elif self.suggests:
+            snode = node.xpath("lst/int[@name='numFound']")
+            if snode:
+                self.numFound = snode[0].text
+            else:
+                self.numFound = 0
+        else:
+            self.numFound = int(node.attrib['numFound'])
         
         if self.grouped:
             ngroups = node.xpath("lst/int[@name='ngroups']")
@@ -668,6 +683,7 @@ class SolrResult(object):
             self.start = start_param[0].text if start_param else 0
         self.docs = [schema.parse_result_doc(n) for n in node.xpath("doc")]
         self.groups = [schema.parse_group(n) for n in node.xpath("lst/arr[@name='groups']/lst")]
+        self.suggestions = [n.text for n in node.xpath("lst/arr[@name='suggestion']/str")]
         
     def __str__(self):
         return "%(numFound)s results found, starting at #%(start)s\n\n" % self.__dict__ + str(self.docs)
