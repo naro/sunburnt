@@ -216,16 +216,16 @@ You can extract more information from the response than simply the list of resul
 
 and the results themselves are in the following attributes
 
-* ``response.results`` : the results of your main query.
+* ``response.result`` : the results of your main query.
 * ``response.facet_counts`` : see `Faceting`_ below.
 * ``response.highlighting`` : see `Highlighting`_ below.
 * ``response.more_like_these`` : see `More Like This`_ below.
 
-Finally, ``response.results`` itself has the following attributes
+Finally, ``response.result`` itself has the following attributes
 
-* ``response.results.numFound`` : total number of docs in the index which fulfilled the query.
-* ``response.results.docs`` : the actual results themselves (more easily extracted as ``list(response)``).
-* ``response.results.start`` : if the number of docs is less than numFound, then this is the pagination offset. 
+* ``response.result.numFound`` : total number of docs in the index which fulfilled the query.
+* ``response.result.docs`` : the actual results themselves (more easily extracted as ``list(response)``).
+* ``response.result.start`` : if the number of docs is less than numFound, then this is the pagination offset. 
 
 
 Pagination
@@ -246,6 +246,38 @@ will query for documents containing "black", and then return the
 will return the 11th result, and ``rows=30`` will return the next 30 results,
 up to the 40th.
 
+
+Pagination with Django
+......................
+
+If you are using sunburnt with `Django
+<https://www.djangoproject.com/>`_, you can paginate your query
+results with `Django's Paginator
+<https://docs.djangoproject.com/en/1.3/topics/pagination/>`_.  For
+example, the pagination example above could be wrapped in a Django
+Paginator as simply as this:
+
+::
+
+  from django.core.paginator import Paginator
+
+  paginator = Paginator(si.query("black"), 30)    # 30 results per page
+
+The resulting paginator object can then be used in a Django view (or
+anywhere else you want to paginate contents) exactly as described in
+the `paginator example in the Django documentation
+<https://docs.djangoproject.com/en/1.3/topics/pagination/#using-paginator-in-a-view>`_.
+
+.. Note::
+
+  When using a sunburnt query object with a Django paginator, you can
+  chain any number of filters or any of the other methods that return
+  a :class:`~sunburnt.SolrSearch` instance; however, you should *not*
+  call :meth:`~sunburnt.SolrSearch.execute`, as that will execute the
+  query and return the result set for the current query; to function
+  properly, the paginator needs to be able to query Solr for the total
+  number of matches for the query and then add pagination options to
+  slice up the results appropriately.
 
 Returning different fields
 --------------------------
@@ -731,7 +763,31 @@ The results are shown as a dictionary of dictionaries. The top-level key is the 
 mapping field names to fragments of highlighted text. In this case we only asked for
 highlighting on the ``name`` field. Multiple fragments might be returned for each field,
 though in this case we only get one fragment each. The text is highlighted with HTML, and
-the fragments should be suitable for dropping straight into a search template.
+the fragments should be suitable for dropping straight into a search
+template.
+
+If you are using the default result format (that is, if you are not
+specifying a ``constructor`` option when you call
+:meth:`~sunburnt.search.SolrSearch.execute`), highlighting results for
+a single result can be accessed on the individual result item as a
+dictionary in a ``solr_highlights`` field.  For example, with the
+highlighted query above, you could access highlight snippets for the
+``name`` field on an individual result as
+``result['solr_highlights']['name']``.  This is particularly
+convenient for displaying highlighted text snippets in a template;
+e.g., displaying highlights in a Django template might look like this:
+
+::
+    
+  {% for snippet in book.solr_highlights.name %}
+     <p>... {{ snippet|safe }} ...</p>
+  {% endfor %}
+
+.. Note::
+
+  The ``solr_highlights`` field will only be available on a result
+  item if highlights were found for that record.
+
 
 Again, Solr supports a large number of options to the highlighting command,
 and all of these are exposed through sunburnt. The full list of supported options is:
@@ -745,6 +801,7 @@ and all of these are exposed through sunburnt. The full list of supported option
 
 See the note above in `Faceting`_ about using keyword arguments with periods.
 
+.. _standard-query-more-like-this:
 
 More Like This
 --------------
@@ -760,8 +817,9 @@ are similar to each of the documents in the search result.
  more-like-this searches on documents that are already in its index.
 
 More-like-this searches are accomplished with the ``mlt()`` chainable
-option. You need to tell solr which fields to consider when deciding
-similarity.
+option. Solr needs to know which fields to consider when deciding similarity;
+if you don't make any choice, then the default field (specified by ``schema.xml``)
+will be used.
 
 ::
 
@@ -838,3 +896,12 @@ Solr these are stored as base64-encoded blobs, but as a sunburnt user you don’
 have to care about this. Sunburnt will automatically transcode to and from base64
 as appropriate, and your results will contain a binary string where appropriate.
 (Querying on Binary Fields is not supported, and doesn’t make much sense anyway).
+
+UUID fields
+-----------
+
+From version 1.4 of Solr, fields for UUIDs are supported in the schema (see http://wiki.apache.org/solr/UniqueKey).
+When retrieving results, Solr will automatically translate any UUID fields into
+python UUID objects (see http://docs.python.org/library/uuid.html). When inserting documents, sunburnt will accept values
+which are either UUID objects or UUID strings; or the string "NEW", to indicate that
+a UUID should be created on ingestion.

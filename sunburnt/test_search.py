@@ -6,11 +6,19 @@ except ImportError:
     from StringIO import StringIO
 
 import datetime
+
+from lxml.builder import E
+from lxml.etree import tostring
 import mx.DateTime
 
 from .schema import SolrSchema, SolrError
-from .search import SolrSearch, PaginateOptions, SortOptions, FieldLimitOptions, FacetOptions, HighlightOptions, MoreLikeThisOptions, params_from_dict
+from .search import SolrSearch, MltSolrSearch, PaginateOptions, SortOptions, FieldLimitOptions, FacetOptions, HighlightOptions, MoreLikeThisOptions, params_from_dict
 from .strings import RawString
+from .sunburnt import SolrInterface
+
+from .test_sunburnt import MockConnection, MockResponse
+
+from nose.tools import assert_equal
 
 debug = False
 
@@ -168,9 +176,9 @@ good_query_data = {
         ([], {"sdouble_field":3}, # casting from int should work
          {"q":u"sdouble_field:3.0"}),
         ([], {"date_field":datetime.datetime(2009, 1, 1)},
-         {"q":u"date_field:2009-01-01T00\\:00\\:00.000000Z"}),
+         {"q":u"date_field:2009-01-01T00\\:00\\:00Z"}),
         ([], {"date_field":mx.DateTime.DateTime(2009, 1, 1)},
-         {"q":u"date_field:2009-01-01T00\\:00\\:00.000000Z"}),
+         {"q":u"date_field:2009-01-01T00\\:00\\:00Z"}),
         ),
 
     "query":(
@@ -193,17 +201,17 @@ good_query_data = {
         ([], {"int_field__range":(3, -3)},
          [("q", u"int_field:[\-3 TO 3]")]),
         ([], {"date_field__lt":datetime.datetime(2009, 1, 1)},
-         [("q", u"date_field:{* TO 2009\\-01\\-01T00\\:00\\:00.000000Z}")]),
+         [("q", u"date_field:{* TO 2009\\-01\\-01T00\\:00\\:00Z}")]),
         ([], {"date_field__gt":datetime.datetime(2009, 1, 1)},
-         [("q", u"date_field:{2009\\-01\\-01T00\\:00\\:00.000000Z TO *}")]),
+         [("q", u"date_field:{2009\\-01\\-01T00\\:00\\:00Z TO *}")]),
         ([], {"date_field__rangeexc":(datetime.datetime(2009, 1, 1), datetime.datetime(2009, 1, 2))},
-         [("q", "date_field:{2009\\-01\\-01T00\\:00\\:00.000000Z TO 2009\\-01\\-02T00\\:00\\:00.000000Z}")]),
+         [("q", "date_field:{2009\\-01\\-01T00\\:00\\:00Z TO 2009\\-01\\-02T00\\:00\\:00Z}")]),
         ([], {"date_field__lte":datetime.datetime(2009, 1, 1)},
-         [("q", u"date_field:[* TO 2009\\-01\\-01T00\\:00\\:00.000000Z]")]),
+         [("q", u"date_field:[* TO 2009\\-01\\-01T00\\:00\\:00Z]")]),
         ([], {"date_field__gte":datetime.datetime(2009, 1, 1)},
-         [("q", u"date_field:[2009\\-01\\-01T00\\:00\\:00.000000Z TO *]")]),
+         [("q", u"date_field:[2009\\-01\\-01T00\\:00\\:00Z TO *]")]),
         ([], {"date_field__range":(datetime.datetime(2009, 1, 1), datetime.datetime(2009, 1, 2))},
-         [("q", u"date_field:[2009\\-01\\-01T00\\:00\\:00.000000Z TO 2009\\-01\\-02T00\\:00\\:00.000000Z]")]),
+         [("q", u"date_field:[2009\\-01\\-01T00\\:00\\:00Z TO 2009\\-01\\-02T00\\:00\\:00Z]")]),
         ([], {'string_field':['hello world', 'goodbye, cruel world']},
          [("q", u"string_field:goodbye,\\ cruel\\ world AND string_field:hello\\ world")]),
         # Raw strings
@@ -216,7 +224,7 @@ def check_query_data(method, args, kwargs, output):
     solr_search = SolrSearch(interface)
     p = getattr(solr_search, method)(*args, **kwargs).params()
     try:
-        assert p == output
+        assert p == output, "Unequal: %r, %r" % (p, output)
     except AssertionError:
         if debug:
             print p
@@ -517,3 +525,60 @@ def check_url_encode_data(kwargs, output):
 def test_url_encode_data():
     for kwargs, output in param_encode_data:
         yield check_url_encode_data, kwargs, output
+
+mlt_query_options_data = (
+    ('text_field', {}, {},
+     [('mlt.fl', 'text_field')]),
+    (['string_field', 'text_field'], {'string_field': 3.0}, {},
+     [('mlt.fl', 'string_field,text_field'), ('mlt.qf', 'string_field^3.0')]),
+    ('text_field', {}, {'mindf': 3, 'interestingTerms': 'details'},
+     [('mlt.fl', 'text_field'), ('mlt.interestingTerms', 'details'),
+      ('mlt.mindf', '3')]),
+)
+
+def check_mlt_query_options(fields, query_fields, kwargs, output):
+    q = MltSolrSearch(interface, content="This is the posted content.")
+    q = q.mlt(fields, query_fields=query_fields, **kwargs)
+    assert_equal(q.params(), output)
+
+def test_mlt_query_options():
+    for (fields, query_fields, kwargs, output) in mlt_query_options_data:
+        yield check_mlt_query_options, fields, query_fields, kwargs, output
+
+
+class HighlightingMockResponse(MockResponse):
+    def __init__(self, highlighting, *args, **kwargs):
+        self.highlighting = highlighting
+        super(HighlightingMockResponse, self).__init__(*args, **kwargs)
+
+    def extra_response_parts(self):
+        contents = []
+        if self.highlighting:
+            contents.append(
+                    E.lst({'name':'highlighting'}, E.lst({'name':'0'}, E.arr({'name':'string_field'}, E.str('zero'))))
+                    )
+        return contents
+
+class HighlightingMockConnection(MockConnection):
+    def _handle_request(self, uri_obj, params, method, body, headers):
+        highlighting = params.get('hl') == ['true']
+        if method == 'GET' and uri_obj.path.endswith('/select/'):
+            return self.MockStatus(200), HighlightingMockResponse(highlighting, 0, 1).xml_response()
+
+highlighting_interface = SolrInterface("http://test.example.com/", http_connection=HighlightingMockConnection())
+
+solr_highlights_data = (
+    (None, dict, None),
+    (['string_field'], dict, {'string_field': ['zero']}),
+    )
+
+def check_transform_results(highlighting, constructor, solr_highlights):
+    q = highlighting_interface.query('zero')
+    if highlighting:
+        q = q.highlight(highlighting)
+    docs = q.execute().result.docs
+    assert_equal(docs[0].get('solr_highlights'), solr_highlights)
+
+def test_transform_result():
+    for highlighting, constructor, solr_highlights in solr_highlights_data:
+        yield check_transform_results, highlighting, constructor, solr_highlights
