@@ -773,7 +773,7 @@ class GroupOptions(Options):
     opts = {"field":unicode,
             "limit":int,
             "main":bool,
-            "truncate":bool,
+            "truncate":bool,    # available as of Solr 3.4
             "ngroups":bool
            }
            
