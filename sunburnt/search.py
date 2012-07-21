@@ -521,7 +521,10 @@ class BaseSearch(object):
                 total_results = self.paginator.rows
             else:
                 response = self.paginate(rows=0).execute()
-                total_results = response.result.numFound
+                if response.result.grouped and self.grouper.options().get('group.ngroups', False):
+                    total_results = response.result.ngroups
+                else:
+                    total_results = response.result.numFound
                 if self.paginator.start is not None:
                     total_results -= self.paginator.start
             self._count = total_results
